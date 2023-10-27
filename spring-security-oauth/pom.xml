@@ -149,7 +149,7 @@
 		<dependency>
 			<groupId>net.oauth</groupId>
 			<artifactId>oauth-core</artifactId>
-			<version>20090531</version>
+			<version>20100601-atlassian-5</version>
 			<scope>test</scope>
 			<exclusions>
 				<exclusion>

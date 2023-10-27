@@ -326,6 +326,10 @@
       <id>oauth.googlecode.net</id>
       <url>http://oauth.googlecode.com/svn/code/maven/</url>
     </repository>
+    <repository>
+      <id>packages.atlassian.com</id>
+      <url>https://packages.atlassian.com/maven-3rdparty/</url>
+    </repository>
   </repositories>
 
   <pluginRepositories>

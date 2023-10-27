@@ -32,6 +32,7 @@ import org.springframework.security.oauth2.provider.AuthorizationRequest;
 import org.springframework.security.oauth2.provider.ClientDetails;
 import org.springframework.security.oauth2.provider.ClientDetailsService;
 import org.springframework.security.oauth2.provider.OAuth2Authentication;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.Assert;
 
 /**
@@ -70,6 +71,7 @@ public class DefaultTokenServices implements AuthorizationServerTokenServices, R
 		Assert.notNull(tokenStore, "tokenStore must be set");
 	}
 
+	@Transactional
 	public OAuth2AccessToken createAccessToken(OAuth2Authentication authentication) throws AuthenticationException {
 
 		OAuth2AccessToken existingAccessToken = tokenStore.getAccessToken(authentication);
@@ -105,6 +107,7 @@ public class DefaultTokenServices implements AuthorizationServerTokenServices, R
 
 	}
 
+	@Transactional(noRollbackFor={InvalidTokenException.class, InvalidGrantException.class})
 	public OAuth2AccessToken refreshAccessToken(String refreshTokenValue, AuthorizationRequest request)
 			throws AuthenticationException {
 
