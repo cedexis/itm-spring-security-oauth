@@ -1,10 +1,15 @@
 package org.springframework.security.oauth2.provider.token;
 
+import java.io.UnsupportedEncodingException;
+import java.math.BigInteger;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 
 import javax.sql.DataSource;
 
@@ -22,7 +27,7 @@ import org.springframework.util.Assert;
 
 /**
  * Implementation of token services that stores tokens in a database.
- * 
+ *
  * @author Ken Dombeck
  * @author Luke Taylor
  * @author Dave Syer
@@ -95,21 +100,26 @@ public class JdbcTokenStore implements TokenStore {
 	public OAuth2AccessToken getAccessToken(OAuth2Authentication authentication) {
 		OAuth2AccessToken accessToken = null;
 
+		String key = authenticationKeyGenerator.extractKey(authentication);
 		try {
 			accessToken = jdbcTemplate.queryForObject(selectAccessTokenFromAuthenticationSql,
 					new RowMapper<OAuth2AccessToken>() {
 						public OAuth2AccessToken mapRow(ResultSet rs, int rowNum) throws SQLException {
 							return deserializeAccessToken(rs.getBytes(2));
 						}
-					}, authenticationKeyGenerator.extractKey(authentication));
+					}, key);
 		}
 		catch (EmptyResultDataAccessException e) {
 			if (LOG.isInfoEnabled()) {
 				LOG.debug("Failed to find access token for authentication " + authentication);
 			}
 		}
+		catch (IllegalArgumentException e) {
+			LOG.error("Could not extract access token for authentication " + authentication);
+		}
 
-		if (accessToken != null && !authentication.equals(readAuthentication(accessToken.getValue()))) {
+		if (accessToken != null
+				&& !key.equals(authenticationKeyGenerator.extractKey(readAuthentication(accessToken.getValue())))) {
 			removeAccessToken(accessToken.getValue());
 			// Keep the store consistent (maybe the same user is represented by this authentication but the details have
 			// changed)
@@ -124,28 +134,34 @@ public class JdbcTokenStore implements TokenStore {
 			refreshToken = token.getRefreshToken().getValue();
 		}
 
-		jdbcTemplate.update(insertAccessTokenSql, new Object[] { token.getValue(),
+		jdbcTemplate.update(insertAccessTokenSql, new Object[] { extractTokenKey(token.getValue()),
 				new SqlLobValue(serializeAccessToken(token)), authenticationKeyGenerator.extractKey(authentication),
 				authentication.isClientOnly() ? null : authentication.getName(),
 				authentication.getAuthorizationRequest().getClientId(),
-				new SqlLobValue(serializeAuthentication(authentication)), refreshToken }, new int[] { Types.VARCHAR,
-				Types.BLOB, Types.VARCHAR, Types.VARCHAR, Types.VARCHAR, Types.BLOB, Types.VARCHAR });
+				new SqlLobValue(serializeAuthentication(authentication)), extractTokenKey(refreshToken) }, new int[] {
+				Types.VARCHAR, Types.BLOB, Types.VARCHAR, Types.VARCHAR, Types.VARCHAR, Types.BLOB, Types.VARCHAR });
 	}
 
 	public OAuth2AccessToken readAccessToken(String tokenValue) {
 		OAuth2AccessToken accessToken = null;
+
+		String temp = extractTokenKey(tokenValue);
 
 		try {
 			accessToken = jdbcTemplate.queryForObject(selectAccessTokenSql, new RowMapper<OAuth2AccessToken>() {
 				public OAuth2AccessToken mapRow(ResultSet rs, int rowNum) throws SQLException {
 					return deserializeAccessToken(rs.getBytes(2));
 				}
-			}, tokenValue);
+			}, temp);
 		}
 		catch (EmptyResultDataAccessException e) {
 			if (LOG.isInfoEnabled()) {
 				LOG.info("Failed to find access token for token " + tokenValue);
 			}
+		}
+		catch (IllegalArgumentException e) {
+			LOG.warn("Failed to deserialize access token for " + tokenValue);
+			removeAccessToken(tokenValue);
 		}
 
 		return accessToken;
@@ -156,7 +172,7 @@ public class JdbcTokenStore implements TokenStore {
 	}
 
 	public void removeAccessToken(String tokenValue) {
-		jdbcTemplate.update(deleteAccessTokenSql, tokenValue);
+		jdbcTemplate.update(deleteAccessTokenSql, extractTokenKey(tokenValue));
 	}
 
 	public OAuth2Authentication readAuthentication(OAuth2AccessToken token) {
@@ -166,25 +182,31 @@ public class JdbcTokenStore implements TokenStore {
 	public OAuth2Authentication readAuthentication(String token) {
 		OAuth2Authentication authentication = null;
 
+		String temp = extractTokenKey(token);
+
 		try {
 			authentication = jdbcTemplate.queryForObject(selectAccessTokenAuthenticationSql,
 					new RowMapper<OAuth2Authentication>() {
 						public OAuth2Authentication mapRow(ResultSet rs, int rowNum) throws SQLException {
 							return deserializeAuthentication(rs.getBytes(2));
 						}
-					}, token);
+					}, temp);
 		}
 		catch (EmptyResultDataAccessException e) {
 			if (LOG.isInfoEnabled()) {
 				LOG.info("Failed to find access token for token " + token);
 			}
 		}
+		catch (IllegalArgumentException e) {
+			LOG.warn("Failed to deserialize authentication for " + token);
+			removeAccessToken(token);
+		}
 
 		return authentication;
 	}
 
 	public void storeRefreshToken(OAuth2RefreshToken refreshToken, OAuth2Authentication authentication) {
-		jdbcTemplate.update(insertRefreshTokenSql, new Object[] { refreshToken.getValue(),
+		jdbcTemplate.update(insertRefreshTokenSql, new Object[] { extractTokenKey(refreshToken.getValue()),
 				new SqlLobValue(serializeRefreshToken(refreshToken)),
 				new SqlLobValue(serializeAuthentication(authentication)) }, new int[] { Types.VARCHAR, Types.BLOB,
 				Types.BLOB });
@@ -198,12 +220,16 @@ public class JdbcTokenStore implements TokenStore {
 				public OAuth2RefreshToken mapRow(ResultSet rs, int rowNum) throws SQLException {
 					return deserializeRefreshToken(rs.getBytes(2));
 				}
-			}, token);
+			}, extractTokenKey(token));
 		}
 		catch (EmptyResultDataAccessException e) {
 			if (LOG.isInfoEnabled()) {
 				LOG.info("Failed to find refresh token for token " + token);
 			}
+		}
+		catch (IllegalArgumentException e) {
+			LOG.warn("Failed to deserialize refresh token for token " + token);
+			removeRefreshToken(token);
 		}
 
 		return refreshToken;
@@ -214,7 +240,7 @@ public class JdbcTokenStore implements TokenStore {
 	}
 
 	public void removeRefreshToken(String token) {
-		jdbcTemplate.update(deleteRefreshTokenSql, token);
+		jdbcTemplate.update(deleteRefreshTokenSql, extractTokenKey(token));
 	}
 
 	public OAuth2Authentication readAuthenticationForRefreshToken(OAuth2RefreshToken token) {
@@ -230,12 +256,16 @@ public class JdbcTokenStore implements TokenStore {
 						public OAuth2Authentication mapRow(ResultSet rs, int rowNum) throws SQLException {
 							return deserializeAuthentication(rs.getBytes(2));
 						}
-					}, value);
+					}, extractTokenKey(value));
 		}
 		catch (EmptyResultDataAccessException e) {
 			if (LOG.isInfoEnabled()) {
 				LOG.info("Failed to find access token for token " + value);
 			}
+		}
+		catch (IllegalArgumentException e) {
+			LOG.warn("Failed to deserialize access token for " + value);
+			removeRefreshToken(value);
 		}
 
 		return authentication;
@@ -246,46 +276,104 @@ public class JdbcTokenStore implements TokenStore {
 	}
 
 	public void removeAccessTokenUsingRefreshToken(String refreshToken) {
-		jdbcTemplate.update(deleteAccessTokenFromRefreshTokenSql, new Object[] { refreshToken },
+		jdbcTemplate.update(deleteAccessTokenFromRefreshTokenSql, new Object[] { extractTokenKey(refreshToken) },
 				new int[] { Types.VARCHAR });
 	}
 
 	public Collection<OAuth2AccessToken> findTokensByClientId(String clientId) {
-		Collection<OAuth2AccessToken> accessTokens = new ArrayList<OAuth2AccessToken>();
+		List<OAuth2AccessToken> accessTokens = new ArrayList<OAuth2AccessToken>();
 
 		try {
-			accessTokens = jdbcTemplate.query(selectAccessTokensFromClientIdSql, new RowMapper<OAuth2AccessToken>() {
-				public OAuth2AccessToken mapRow(ResultSet rs, int rowNum) throws SQLException {
-					return deserializeAccessToken(rs.getBytes(2));
-				}
-			}, clientId);
+			accessTokens = jdbcTemplate.query(selectAccessTokensFromClientIdSql, new SafeAccessTokenRowMapper(),
+					clientId);
 		}
 		catch (EmptyResultDataAccessException e) {
 			if (LOG.isInfoEnabled()) {
 				LOG.info("Failed to find access token for clientId " + clientId);
 			}
 		}
+		accessTokens = removeNulls(accessTokens);
 
 		return accessTokens;
 	}
 
 	public Collection<OAuth2AccessToken> findTokensByUserName(String userName) {
-		Collection<OAuth2AccessToken> accessTokens = new ArrayList<OAuth2AccessToken>();
+		List<OAuth2AccessToken> accessTokens = new ArrayList<OAuth2AccessToken>();
 
 		try {
-			accessTokens = jdbcTemplate.query(selectAccessTokensFromUserNameSql, new RowMapper<OAuth2AccessToken>() {
-				public OAuth2AccessToken mapRow(ResultSet rs, int rowNum) throws SQLException {
-					return deserializeAccessToken(rs.getBytes(2));
-				}
-			}, userName);
+			accessTokens = jdbcTemplate.query(selectAccessTokensFromUserNameSql, new SafeAccessTokenRowMapper(),
+					userName);
 		}
 		catch (EmptyResultDataAccessException e) {
 			if (LOG.isInfoEnabled()) {
 				LOG.info("Failed to find access token for userName " + userName);
 			}
 		}
+		accessTokens = removeNulls(accessTokens);
 
 		return accessTokens;
+	}
+
+	private List<OAuth2AccessToken> removeNulls(List<OAuth2AccessToken> accessTokens) {
+		List<OAuth2AccessToken> tokens = new ArrayList<OAuth2AccessToken>();
+		for (OAuth2AccessToken token : accessTokens) {
+			if (token != null) {
+				tokens.add(token);
+			}
+		}
+		return tokens;
+	}
+
+	/**
+	 * ITM-4536 - This is basically the function that changes how the token is stored.
+	 * In 1.0.0.RC3 version this function didn't exist and the token was saved in plain text.
+	 * In 1.0.5.RELEASE this function was introduced and the token was saved as an MD5 hash.
+	 * As a result, if we ever want to upgrade spring-security-oauth2 library we'll need to
+	 * truncate the necessary table since it the library won't be able to find the existing
+	 * token using an MD5 hash.
+	 *
+	 * In the context of ITM-4536, we want to avoid this fuss and just fix the issue. So, i'm
+	 * reverting the functioning to use the token as is to be backwards compatible with
+	 * our existing database.
+	 *
+	 * @author ioannisk
+	 * @param value
+	 * @return
+	 */
+	protected String extractTokenKey(String value) {
+//		if (value == null) {
+//			return null;
+//		}
+//		MessageDigest digest;
+//		try {
+//			digest = MessageDigest.getInstance("MD5");
+//		}
+//		catch (NoSuchAlgorithmException e) {
+//			throw new IllegalStateException("MD5 algorithm not available.  Fatal (should be in the JDK).");
+//		}
+//
+//		try {
+//			byte[] bytes = digest.digest(value.getBytes("UTF-8"));
+//			return String.format("%032x", new BigInteger(1, bytes));
+//		}
+//		catch (UnsupportedEncodingException e) {
+//			throw new IllegalStateException("UTF-8 encoding not available.  Fatal (should be in the JDK).");
+//		}
+
+		return value;
+	}
+
+	private final class SafeAccessTokenRowMapper implements RowMapper<OAuth2AccessToken> {
+		public OAuth2AccessToken mapRow(ResultSet rs, int rowNum) throws SQLException {
+			try {
+				return deserializeAccessToken(rs.getBytes(2));
+			}
+			catch (IllegalArgumentException e) {
+				String token = rs.getString(1);
+				jdbcTemplate.update(deleteAccessTokenSql, token);
+				return null;
+			}
+		}
 	}
 
 	protected byte[] serializeAccessToken(OAuth2AccessToken token) {
