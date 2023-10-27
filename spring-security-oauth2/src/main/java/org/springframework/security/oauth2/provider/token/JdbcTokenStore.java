@@ -182,15 +182,13 @@ public class JdbcTokenStore implements TokenStore {
 	public OAuth2Authentication readAuthentication(String token) {
 		OAuth2Authentication authentication = null;
 
-		String temp = extractTokenKey(token);
-
 		try {
 			authentication = jdbcTemplate.queryForObject(selectAccessTokenAuthenticationSql,
 					new RowMapper<OAuth2Authentication>() {
 						public OAuth2Authentication mapRow(ResultSet rs, int rowNum) throws SQLException {
 							return deserializeAuthentication(rs.getBytes(2));
 						}
-					}, temp);
+					}, extractTokenKey(token));
 		}
 		catch (EmptyResultDataAccessException e) {
 			if (LOG.isInfoEnabled()) {
